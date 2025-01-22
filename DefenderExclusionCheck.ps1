@@ -56,24 +56,26 @@ function Scan-Folder {
     param (
         [string]$Path,
         [int]$CurrentDepth,
-        [int]$MaxDepth,
-        [ref]$Results
+        [int]$MaxDepth
     )
+
+    # Initialize an array to collect scan results
+    $localResults = @()
 
     # Only proceed if current depth is within the max depth
     if ($CurrentDepth -gt $MaxDepth) {
-        return
+        return $localResults
     }
 
     # Check if the path is accessible
     if (-not (Test-Path -Path $Path -PathType Container)) {
-        $Results.Value += [PSCustomObject]@{
+        $localResults += [PSCustomObject]@{
             Path    = $Path
             Status  = "Inaccessible"
             Message = "Cannot access the folder."
             Depth   = $CurrentDepth
         }
-        return
+        return $localResults
     }
 
     Write-Host (" " * (($CurrentDepth - 1) * 2)) + "Scanning: $Path" -ForegroundColor Cyan
@@ -83,19 +85,19 @@ function Scan-Folder {
         $scanOutput = & "$MpCmdRunPath" -Scan -ScanType 3 -File "$Path\*" 2>&1
     }
     catch {
-        $Results.Value += [PSCustomObject]@{
+        $localResults += [PSCustomObject]@{
             Path    = $Path
             Status  = "Error"
             Message = $_.Exception.Message
             Depth   = $CurrentDepth
         }
         Write-Host (" " * (($CurrentDepth - 1) * 2)) + "Error scanning: $Path" -ForegroundColor Red
-        return
+        return $localResults
     }
 
     # Check if 'skipped' appears in the Defender output
     if ($scanOutput -match 'skipped') {
-        $Results.Value += [PSCustomObject]@{
+        $localResults += [PSCustomObject]@{
             Path    = $Path
             Status  = "Excluded"
             Message = "Scan was skipped."
@@ -104,7 +106,7 @@ function Scan-Folder {
         Write-Host (" " * (($CurrentDepth - 1) * 2)) + "[EXCLUSION DETECTED] Scan skipped." -ForegroundColor Yellow
     }
     else {
-        $Results.Value += [PSCustomObject]@{
+        $localResults += [PSCustomObject]@{
             Path    = $Path
             Status  = "Scanned"
             Message = "Scan completed."
@@ -119,20 +121,23 @@ function Scan-Folder {
             $subFolders = Get-ChildItem -Path $Path -Directory -ErrorAction SilentlyContinue
         }
         catch {
-            $Results.Value += [PSCustomObject]@{
+            $localResults += [PSCustomObject]@{
                 Path    = $Path
                 Status  = "Error"
                 Message = $_.Exception.Message
                 Depth   = $CurrentDepth
             }
             Write-Host (" " * (($CurrentDepth - 1) * 2)) + "Error accessing subfolders of: $Path" -ForegroundColor Red
-            return
+            return $localResults
         }
 
         foreach ($subFolder in $subFolders) {
-            Scan-Folder -Path $subFolder.FullName -CurrentDepth ($CurrentDepth + 1) -MaxDepth $MaxDepth -Results ([ref]$Results.Value)
+            $subResults = Scan-Folder -Path $subFolder.FullName -CurrentDepth ($CurrentDepth + 1) -MaxDepth $MaxDepth
+            $localResults += $subResults
         }
     }
+
+    return $localResults
 }
 
 # --------- Main Script Execution ---------
@@ -150,7 +155,8 @@ foreach ($drive in $drives) {
     Write-Host "`n=== Processing Drive: $drive ===" -ForegroundColor Blue
 
     # Start scanning from the root of the drive
-    Scan-Folder -Path "$drive\" -CurrentDepth 1 -MaxDepth $ScanDepth -Results ([ref]$scanResults)
+    $driveScanResults = Scan-Folder -Path "$drive\" -CurrentDepth 1 -MaxDepth $ScanDepth
+    $scanResults += $driveScanResults
 }
 
 Write-Host "`n=== Scan Completed ===" -ForegroundColor Magenta
